@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"math/rand"
-	"math"
 
 	// Ignore these imports just for cpu profiling
 	"flag"
@@ -21,14 +20,14 @@ const CONVERT string = "A23456789X"
 func (deck *Deck) String() string {
 	str := ""
 	for card, amount := range deck.Cards {
-		char := string(CONVERT[card])
 		for i:=0;i<int(amount);i++ {
-			str += char
+			str += string(CONVERT[card])
 		}
 	}
 	return str
 }
 
+// Get total number of cards in deck
 func (deck *Deck) Size() int {
 	size := 0
 	for _, n := range deck.Cards {
@@ -39,6 +38,7 @@ func (deck *Deck) Size() int {
 
 func (deck *Deck) IsBlackJack() bool {
 	if deck.Size() == 2 {
+		// 1 Ace and 1 High Card
 		if (deck.Cards[0] == 1) && (deck.Cards[9] == 1) {
 			return true
 		}
@@ -47,46 +47,32 @@ func (deck *Deck) IsBlackJack() bool {
 	return false
 }
 
-func (deck *Deck) Shoes(decks int){
+// Create new deck with n 52 cards in shoe
+func Shoes(decks int) Deck {
+	deck := Deck{}
 	for i := range(deck.Cards){
 		deck.Cards[i] = int8(decks * 4)
 	}
+	// There are 4 10s, Kings, Queens, Jacks per deck so 16 total
 	deck.Cards[9] = int8(decks * 16)
+	return deck
 }
 
 func (deck *Deck) Count() int {
 	count := 0
-
-	/*
 	for i, amount := range deck.Cards {
-		value := i + 1
-		count += value * int(amount)
-	}*/
+		count += (i+1) * int(amount)
+	}
 
-	// Above manually unrolled
-	// TODO: investigate if its worth it now that conditional is removed
-	count += 1 * int(deck.Cards[0])
-	count += 2 * int(deck.Cards[1])
-	count += 3 * int(deck.Cards[2])
-	count += 4 * int(deck.Cards[3])
-	count += 5 * int(deck.Cards[4])
-	count += 6 * int(deck.Cards[5])
-	count += 7 * int(deck.Cards[6])
-	count += 8 * int(deck.Cards[7])
-	count += 9 * int(deck.Cards[8])
-	count += 10 * int(deck.Cards[9])
-	
-
+	// For soft counts ace has already been counted as 1, see if it can be worth more
 	if deck.Cards[0] >= 1 {
 		if count <= 11 { count += 10 }
-		if deck.Cards[1] >= 2 {
-			if count <= 11 { count += 10 }
-		}
 	}
 
 	return count
 }
 
+// Draw random card weighted probability
 func (deck *Deck) Draw() int {
 	chosenCard := rand.Intn(deck.Size())
 	start := 0	
@@ -103,24 +89,26 @@ func (deck *Deck) Draw() int {
 	return -1
 }
 
+// Add card to deck
 func (deck *Deck) Add(cardIndex int) *Deck {
 	deck.Cards[cardIndex]++
 	return deck
 }
 
+// Remove card from deck
 func (deck *Deck) Pull(cardIndex int) *Deck {
 	deck.Cards[cardIndex]--
 	return deck
 }
 
-func (deck Deck) PlayerGameTree(dealer Deck, hand Deck, firstTurn bool, playerTransposition map[Deck]float64) float64 {
+func (deck Deck) PlayerGameTree(dealer Deck, hand Deck, firstTurn bool, playerTransposition map[Deck]float64) (float64, string) {
 	if hand.Count() > 21 {
-		return -1
+		return -1, "bust"
 	}
 
 	transpositionEV, contains := playerTransposition[hand]
 	if contains {
-		return transpositionEV
+		return transpositionEV, "?"
 	}
 
 	
@@ -140,11 +128,17 @@ func (deck Deck) PlayerGameTree(dealer Deck, hand Deck, firstTurn bool, playerTr
 		subtreeDeck.Pull(card)
 		subtreeHand.Add(card)
 		
-		expectation := subtreeDeck.PlayerGameTree(dealer, subtreeHand, false, playerTransposition)
+		expectation, _ := subtreeDeck.PlayerGameTree(dealer, subtreeHand, false, playerTransposition)
 		hitEV += probability * expectation
 	}
 
-	finalEV := math.Max(hitEV, standEV)
+	finalEV := standEV
+	finalAction := "stand"
+	
+	if hitEV > finalEV {
+		finalEV = hitEV
+		finalAction = "hit"
+	}
 
 	if firstTurn {
 		// Double Down
@@ -174,25 +168,38 @@ func (deck Deck) PlayerGameTree(dealer Deck, hand Deck, firstTurn bool, playerTr
 				subtreeHand := hand
 
 				subtreeHand.Pull(card)
-				expectation := subtreeDeck.PlayerGameTree(dealer, subtreeHand, false, map[Deck]float64{})
+				expectation, _ := subtreeDeck.PlayerGameTree(dealer, subtreeHand, false, map[Deck]float64{})
 				splitEV = 2 * expectation
 				break
 			}
 		}
 
+		
+
+		if splitEV > finalEV {
+			finalEV = splitEV
+			finalAction = "split"
+		}
+
+		if doubleEV > finalEV {
+			finalEV = doubleEV
+			finalAction = "double"
+		}
+
+		/*
 		fmt.Println("Double", doubleEV)
 		fmt.Println("Hit", hitEV)
 		fmt.Println("Stand", standEV)
 		fmt.Println("Split", splitEV)
-
-		finalEV = math.Max(finalEV, math.Max(splitEV, doubleEV))
+		fmt.Println(">", finalAction, finalEV)
+		*/
+		
 	}
 	
 	playerTransposition[hand] = finalEV
-	return finalEV
+	return finalEV, finalAction
 }
 
-// Returns probability of player winning
 func (deck Deck) DealerGameTree(dealer Deck, playerCount int, blackjack bool, dealerTransposition map[Deck]float64) float64 {
 	dealerCount := dealer.Count()
 
@@ -251,6 +258,40 @@ func (deck Deck) DealerGameTree(dealer Deck, playerCount int, blackjack bool, de
 	return EV
 }
 
+func computeHand(playerCard1, playerCard2, dealerCard int){
+	testDeck := Shoes(6)
+
+	playerDeck := Deck{}
+	dealerDeck := Deck{}
+
+	playerDeck.Add(playerCard1).Add(playerCard2)
+	dealerDeck.Add(dealerCard)
+
+	fmt.Println(playerDeck.Count(), " vs ", dealerDeck.String())
+	
+	fmt.Println(testDeck.PlayerGameTree(dealerDeck, playerDeck, true, map[Deck]float64{}))
+	fmt.Println("")
+}
+
+func computeBasicStrategy(){
+	for j:=0;j<=9;j++{
+		// 4 through 11
+		for i:=1;i<=8;i++{
+			computeHand(1,i,j)
+		}
+
+		// 12 through 20
+		for i:=2;i<=9;i++{
+			computeHand(9,i,j)
+		}
+
+
+		//for i:=2;i<=9;i++{
+		//	computeHand(9,i,j)
+		//}
+	}
+}
+
 var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
 
 func main(){
@@ -265,49 +306,5 @@ func main(){
         defer pprof.StopCPUProfile()
 	}
     
-	testDeck := Deck{}
-	testDeck.Shoes(4)
-
-	playerDeck := Deck{}
-	dealerDeck := Deck{}
-
-	playerDeck.Add(3).Add(7) // Add 4 and 8
-	dealerDeck.Add(9) // Add 10
-	
-	fmt.Println(testDeck.PlayerGameTree(dealerDeck, playerDeck, true, map[Deck]float64{}))
-
-	return 
-
-	// 2 through 12
-	for card1:=1;card1<=7;card1++ {
-		for dealerCard:=0;dealerCard<=9;dealerCard++ {
-			testDeck := Deck{}
-			testDeck.Shoes(1)
-
-			playerDeck := Deck{}
-			dealerDeck := Deck{}
-
-			playerDeck.Add(1).Add(card1)
-			dealerDeck.Add(dealerCard)
-			
-			fmt.Println("Hard", 3 + card1, "vs", string(CONVERT[dealerCard]))
-			fmt.Println(testDeck.PlayerGameTree(dealerDeck, playerDeck, true, map[Deck]float64{}))
-		}
-	}
-
-	for card2:=1;card2<=9;card2++ {
-		for dealerCard:=0;dealerCard<=9;dealerCard++ {
-			testDeck := Deck{}
-			testDeck.Shoes(1)
-
-			playerDeck := Deck{}
-			dealerDeck := Deck{}
-
-			playerDeck.Add(9).Add(card2)
-			dealerDeck.Add(dealerCard)
-			
-			fmt.Println("Hard", 10 + card2, "vs", string(CONVERT[dealerCard]))
-			fmt.Println(testDeck.PlayerGameTree(dealerDeck, playerDeck, true, map[Deck]float64{}))
-		}
-	}
+	computeBasicStrategy()
 }
