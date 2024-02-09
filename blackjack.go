@@ -13,7 +13,7 @@ import (
 
 const doubleAfterSplit bool = true
 const blackjackPayout float64 = 1.5
-
+const nSplits int = 2
 
 
 
@@ -148,9 +148,9 @@ func (deck Deck) PlayerGameTree(dealer Deck, hand Deck, canDouble bool, splitsLe
 		finalAction = "hit"
 	}
 
+	doubleEV := 0.0
 	if canDouble {
 		// Double Down
-		doubleEV := 0.0
 		for card, amount := range deck.Cards {
 			if amount == 0 { continue }
 			probability := float64(amount) / size
@@ -174,9 +174,10 @@ func (deck Deck) PlayerGameTree(dealer Deck, hand Deck, canDouble bool, splitsLe
 		}
 	}
 
+	splitEV := -1.0
 	if splitsLeft > 0 {
 		// Split
-		splitEV := -1.0
+		
 		for card, amount := range hand.Cards {
 			if amount == 2 {
 				subtreeDeck := deck
@@ -195,15 +196,17 @@ func (deck Deck) PlayerGameTree(dealer Deck, hand Deck, canDouble bool, splitsLe
 		}
 	}
 	
-	/*
+	/* */
+	if canDouble && splitsLeft == nSplits {
 		fmt.Println("Double", doubleEV)
 		fmt.Println("Hit", hitEV)
 		fmt.Println("Stand", standEV)
 		fmt.Println("Split", splitEV)
-		fmt.Println(">", finalAction, finalEV)
+		fmt.Println("	>", finalAction, finalEV)
+		fmt.Println("")
 		// Surrender is always -0.5 so if EV falls below that
-	*/
-
+	}
+	
 	playerTransposition[hand] = finalEV
 	return finalEV, finalAction
 }
@@ -287,7 +290,7 @@ func computeHand(playerCard1, playerCard2, dealerCard int, remove bool) (float64
 		testDeck.Pull(playerCard1).Pull(playerCard2).Pull(dealerCard)
 	}
 
-	return testDeck.PlayerGameTree(dealerDeck, playerDeck, true, 2, map[Deck]float64{})
+	return testDeck.PlayerGameTree(dealerDeck, playerDeck, true, nSplits, map[Deck]float64{})
 }
 
 func computeBasicStrategy(){
@@ -366,5 +369,9 @@ func main(){
         defer pprof.StopCPUProfile()
 	}
 	
-	computeBasicStrategy()
+	//computeBasicStrategy()
+	for i:=0;i<=9;i++ {
+		fmt.Println("Dealer:", string(CONVERT[i]))
+		computeHand(9,9,i,true)
+	}
 }
