@@ -372,6 +372,6 @@ func main(){
 	//computeBasicStrategy()
 	for i:=0;i<=9;i++ {
 		fmt.Println("Dealer:", string(CONVERT[i]))
-		computeHand(9,9,i,true)
+		computeHand(8,8,i,true)
 	}
 }
