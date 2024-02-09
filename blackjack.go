@@ -11,11 +11,19 @@ import (
 	"runtime/pprof"
 )
 
+const doubleAfterSplit bool = true
+const blackjackPayout float64 = 1.5
+
+
+
+
+
 type Deck struct {
 	Cards [10]int8 // A 2 3 4 5 6 7 8 9 XJQK
 }
 
 const CONVERT string = "A23456789X"
+
 
 func (deck *Deck) String() string {
 	str := ""
@@ -58,18 +66,18 @@ func Shoes(decks int) Deck {
 	return deck
 }
 
-func (deck *Deck) Count() int {
-	count := 0
+func (deck *Deck) Value() int {
+	value := 0
 	for i, amount := range deck.Cards {
-		count += (i+1) * int(amount)
+		value += (i+1) * int(amount)
 	}
 
-	// For soft counts ace has already been counted as 1, see if it can be worth more
+	// For soft values ace has already been valueed as 1, see if it can be worth more
 	if deck.Cards[0] >= 1 {
-		if count <= 11 { count += 10 }
+		if value <= 11 { value += 10 }
 	}
 
-	return count
+	return value
 }
 
 // Draw random card weighted probability
@@ -101,8 +109,8 @@ func (deck *Deck) Pull(cardIndex int) *Deck {
 	return deck
 }
 
-func (deck Deck) PlayerGameTree(dealer Deck, hand Deck, firstTurn bool, playerTransposition map[Deck]float64) (float64, string) {
-	if hand.Count() > 21 {
+func (deck Deck) PlayerGameTree(dealer Deck, hand Deck, canDouble bool, splitsLeft int, playerTransposition map[Deck]float64) (float64, string) {
+	if hand.Value() > 21 {
 		return -1, "bust"
 	}
 
@@ -113,7 +121,7 @@ func (deck Deck) PlayerGameTree(dealer Deck, hand Deck, firstTurn bool, playerTr
 
 	
 	// Compute Stand
-	standEV := deck.DealerGameTree(dealer, hand.Count(), hand.IsBlackJack(), map[Deck]float64{})
+	standEV := deck.DealerGameTree(dealer, hand.Value(), hand.IsBlackJack(), map[Deck]float64{})
 
 	// Compute Hit
 	hitEV := 0.0
@@ -128,7 +136,7 @@ func (deck Deck) PlayerGameTree(dealer Deck, hand Deck, firstTurn bool, playerTr
 		subtreeDeck.Pull(card)
 		subtreeHand.Add(card)
 		
-		expectation, _ := subtreeDeck.PlayerGameTree(dealer, subtreeHand, false, playerTransposition)
+		expectation, _ := subtreeDeck.PlayerGameTree(dealer, subtreeHand, false, 0, playerTransposition)
 		hitEV += probability * expectation
 	}
 
@@ -140,7 +148,7 @@ func (deck Deck) PlayerGameTree(dealer Deck, hand Deck, firstTurn bool, playerTr
 		finalAction = "hit"
 	}
 
-	if firstTurn {
+	if canDouble {
 		// Double Down
 		doubleEV := 0.0
 		for card, amount := range deck.Cards {
@@ -152,14 +160,21 @@ func (deck Deck) PlayerGameTree(dealer Deck, hand Deck, firstTurn bool, playerTr
 
 			subtreeDeck.Pull(card)
 			subtreeHand.Add(card)
-			if subtreeHand.Count() > 21 { 
+			if subtreeHand.Value() > 21 { 
 				doubleEV += probability * -2
 			} else {
-				expectation := subtreeDeck.DealerGameTree(dealer, subtreeHand.Count(), subtreeHand.IsBlackJack(), map[Deck]float64{})
+				expectation := subtreeDeck.DealerGameTree(dealer, subtreeHand.Value(), subtreeHand.IsBlackJack(), map[Deck]float64{})
 				doubleEV += probability * 2 * expectation
 			}
 		}
 
+		if doubleEV > finalEV {
+			finalEV = doubleEV
+			finalAction = "double"
+		}
+	}
+
+	if splitsLeft > 0 {
 		// Split
 		splitEV := -1.0
 		for card, amount := range hand.Cards {
@@ -168,47 +183,40 @@ func (deck Deck) PlayerGameTree(dealer Deck, hand Deck, firstTurn bool, playerTr
 				subtreeHand := hand
 
 				subtreeHand.Pull(card)
-				expectation, _ := subtreeDeck.PlayerGameTree(dealer, subtreeHand, false, map[Deck]float64{})
+				expectation, _ := subtreeDeck.PlayerGameTree(dealer, subtreeHand, doubleAfterSplit, splitsLeft - 1, map[Deck]float64{})
 				splitEV = 2 * expectation
 				break
 			}
-		}
-
-		
+		}	
 
 		if splitEV > finalEV {
 			finalEV = splitEV
 			finalAction = "split"
 		}
-
-		if doubleEV > finalEV {
-			finalEV = doubleEV
-			finalAction = "double"
-		}
-
-		/*
+	}
+	
+	/*
 		fmt.Println("Double", doubleEV)
 		fmt.Println("Hit", hitEV)
 		fmt.Println("Stand", standEV)
 		fmt.Println("Split", splitEV)
 		fmt.Println(">", finalAction, finalEV)
-		*/
-		
-	}
-	
+		// Surrender is always -0.5 so if EV falls below that
+	*/
+
 	playerTransposition[hand] = finalEV
 	return finalEV, finalAction
 }
 
-func (deck Deck) DealerGameTree(dealer Deck, playerCount int, blackjack bool, dealerTransposition map[Deck]float64) float64 {
-	dealerCount := dealer.Count()
+func (deck Deck) DealerGameTree(dealer Deck, playerValue int, blackjack bool, dealerTransposition map[Deck]float64) float64 {
+	dealerValue := dealer.Value()
 
 	// Dealer goes bust
-	if dealerCount > 21 {
+	if dealerValue > 21 {
 		return 1
 	}
 
-	if dealerCount == 21 {
+	if dealerValue == 21 {
 		if dealer.IsBlackJack() {
 			if blackjack {
 				return 0 // If player also gets a blackjack push
@@ -218,16 +226,16 @@ func (deck Deck) DealerGameTree(dealer Deck, playerCount int, blackjack bool, de
 	
 		// If player has a blackjack assume 3:2 payout
 		if blackjack {
-			return 1.5
+			return blackjackPayout
 		}
 	}
 
 	// Dealer stands on 17 and up
 	
-	if dealerCount >= 17 {
-		if dealerCount > playerCount {
+	if dealerValue >= 17 {
+		if dealerValue > playerValue {
 			return -1
-		} else if dealerCount == playerCount {
+		} else if dealerValue == playerValue {
 			return 0
 		}
 		return 1
@@ -250,7 +258,7 @@ func (deck Deck) DealerGameTree(dealer Deck, playerCount int, blackjack bool, de
 		subtreeDeck.Pull(card)
 		subtreeDealer.Add(card)
 		
-		subtreeEV := subtreeDeck.DealerGameTree(subtreeDealer, playerCount, blackjack, dealerTransposition)
+		subtreeEV := subtreeDeck.DealerGameTree(subtreeDealer, playerValue, blackjack, dealerTransposition)
 		EV += probability * subtreeEV
 	}
 
@@ -258,7 +266,15 @@ func (deck Deck) DealerGameTree(dealer Deck, playerCount int, blackjack bool, de
 	return EV
 }
 
-func computeHand(playerCard1, playerCard2, dealerCard int){
+
+
+
+
+
+
+
+
+func computeHand(playerCard1, playerCard2, dealerCard int, remove bool) (float64, string) {
 	testDeck := Shoes(6)
 
 	playerDeck := Deck{}
@@ -267,33 +283,77 @@ func computeHand(playerCard1, playerCard2, dealerCard int){
 	playerDeck.Add(playerCard1).Add(playerCard2)
 	dealerDeck.Add(dealerCard)
 
-	fmt.Println(playerDeck.Count(), " vs ", dealerDeck.String())
-	
-	fmt.Println(testDeck.PlayerGameTree(dealerDeck, playerDeck, true, map[Deck]float64{}))
-	fmt.Println("")
+	if remove {
+		testDeck.Pull(playerCard1).Pull(playerCard2).Pull(dealerCard)
+	}
+
+	return testDeck.PlayerGameTree(dealerDeck, playerDeck, true, 2, map[Deck]float64{})
 }
 
 func computeBasicStrategy(){
-	for j:=0;j<=9;j++{
-		// 4 through 11
-		for i:=1;i<=8;i++{
-			computeHand(1,i,j)
+	charmap := map[string]string{
+		"split" : "Y",
+		"double": "D",
+		"hit"   : "H",
+		"stand" : "S",
+	}
+
+	choiceMatrix := [1000]string{}
+	evMatrix := [1000]float64{}
+
+	
+	for a:=0;a<=9;a++{
+		for b:=0;b<=9;b++{
+			for c:=0;c<=9;c++ {
+				ev, choice := computeHand(b,c,a, true)
+				idx := (100 * a) + (10 * b) + c
+				evMatrix[idx] = ev
+				choiceMatrix[idx] = charmap[choice] 
+			}
 		}
+	}
 
-		// 12 through 20
-		for i:=2;i<=9;i++{
-			computeHand(9,i,j)
+	for z:=0;z<=9;z++ {
+		fmt.Println("===================")
+		fmt.Println("Dealer Upcard: ", string(CONVERT[z]))
+		fmt.Println("   A23456789X")
+		fmt.Println("")
+		for y:=0;y<=9;y++{
+			line := string(CONVERT[y]) + "  "
+			for x:=0;x<=9;x++{
+				idx := (100 * z) + (10 * y) + x
+				line += choiceMatrix[idx]
+			}
+			fmt.Println(line)
 		}
+	}	
 
 
-		//for i:=2;i<=9;i++{
-		//	computeHand(9,i,j)
-		//}
+}
+
+func Count(remaining Deck) int {
+	key := [10]int{1, -1, -1, -1, -1, -1, 0, 0, 0, 1}
+	count := 0
+
+	for i, weight := range key {
+		// We multiply by negative weight cause we are using cards in the deck to compute count, not the ones drawn
+		count += key[i] * -weight
+	} 
+	return count
+}
+
+func simulation(n int){
+	tableDeck := Shoes(6)
+	
+	for i:=0;i<n;i++ {
+		// Reshuffle if less than a deck is left
+		if 52 > tableDeck.Size() {
+			tableDeck = Shoes(6)
+		}
 	}
 }
 
 var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
-
 func main(){
 	// Cpu profiling
 	flag.Parse()
@@ -305,6 +365,6 @@ func main(){
         pprof.StartCPUProfile(f)
         defer pprof.StopCPUProfile()
 	}
-    
+	
 	computeBasicStrategy()
 }
